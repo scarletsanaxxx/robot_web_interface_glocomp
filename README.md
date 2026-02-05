@@ -27,4 +27,4 @@ python3 -m http.server 8000
 > - Get robot TFs displayed
 > - Intergration with slam on the robot
 > - map interaction
-source /opt/ros/humble/setup.bash
+> - Add goal pose to map
