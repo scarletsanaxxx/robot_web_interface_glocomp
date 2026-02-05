@@ -5,11 +5,162 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Unitree Robot Dashboard</title>
     <link rel="stylesheet" href="index.css">
+    <style>
+        /* Additional styles for navigation controls */
+        .map-controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+
+        .nav-btn {
+            padding: 10px 18px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex: 1;
+            justify-content: center;
+            min-width: 120px;
+        }
+
+        .nav-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+
+        .nav-btn:active {
+            transform: translateY(0);
+        }
+
+        .nav-btn-primary {
+            background: #28a745;
+            color: white;
+        }
+
+        .nav-btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .nav-btn-info {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .nav-btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .nav-instructions {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .nav-instructions h4 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav-instructions ul {
+            list-style: none;
+            font-size: 12px;
+            line-height: 1.8;
+            margin: 0;
+            padding: 0;
+        }
+
+        .nav-instructions li {
+            padding-left: 20px;
+            position: relative;
+        }
+
+        .nav-instructions li:before {
+            content: "▸";
+            position: absolute;
+            left: 0;
+            color: #fff;
+        }
+
+        /* Logo styles */
+        .header-content {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .company-logo {
+            height: 50px;
+            width: auto;
+            background: white;
+            padding: 8px 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .header h1 {
+            margin: 0;
+        }
+
+        .goal-info-card {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 10px;
+            border-left: 4px solid #FF3333;
+        }
+
+        .goal-info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            font-size: 12px;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+        }
+    </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🤖 Unitree B2 Robot Dashboard</h1>
+            <div class="header-content">
+                <img src="glocomp-logo.png" alt="Glocomp Logo" class="company-logo">
+                <h1>🤖 Unitree B2 Robot Dashboard</h1>
+            </div>
         </div>
         
         <div class="connection-status">
@@ -148,10 +299,30 @@
             </div>
         </div>
 
-        <!-- Occupancy Grid Map -->
+        <!-- Occupancy Grid Map with Navigation Controls -->
         <div class="card map-card">
-            <div class="card-title">🗺️ Occupancy Grid Map</div>
-            <canvas id="mapCanvas" class="map-container" style="border: 1px solid #444; cursor: grab;"></canvas>
+            <div class="card-title">🗺️ Navigation Map</div>
+            
+            <!-- Navigation Control Buttons -->
+            <div class="map-controls">
+                <button id="setGoalBtn" class="nav-btn nav-btn-primary">
+                    🎯 Set Goal
+                </button>
+                <button id="clearGoalBtn" class="nav-btn nav-btn-danger">
+                    🗑️ Clear Goal
+                </button>
+                <button id="centerViewBtn" class="nav-btn nav-btn-info">
+                    📍 Center Robot
+                </button>
+                <button id="resetZoomBtn" class="nav-btn nav-btn-secondary">
+                    🔍 Reset Zoom
+                </button>
+            </div>
+
+            <!-- Map Canvas -->
+            <canvas id="mapCanvas" class="map-container" style="border: 1px solid #444; cursor: grab; margin-top: 15px;"></canvas>
+            
+            <!-- Map Info -->
             <div class="data-row" style="margin-top: 10px;">
                 <span class="data-label">Zoom Level:</span>
                 <span class="data-value" id="zoomLevel">1.0x</span>
@@ -160,15 +331,126 @@
                 <span class="data-label">Map Status:</span>
                 <span class="data-value" id="mapStatus">Waiting for map data...</span>
             </div>
+
+            <!-- Goal Information Card -->
+            <div class="goal-info-card" id="goalInfoCard" style="display: none;">
+                <h4 style="margin: 0 0 8px 0; font-size: 13px; color: #FF6666;">🎯 Current Goal</h4>
+                <div class="goal-info-row">
+                    <span class="data-label">X Position:</span>
+                    <span class="data-value" id="goalX">--</span>
+                </div>
+                <div class="goal-info-row">
+                    <span class="data-label">Y Position:</span>
+                    <span class="data-value" id="goalY">--</span>
+                </div>
+                <div class="goal-info-row">
+                    <span class="data-label">Distance:</span>
+                    <span class="data-value" id="goalDistance">--</span>
+                </div>
+                <div class="goal-info-row">
+                    <span class="data-label">Direction:</span>
+                    <span class="data-value" id="goalDirection">--</span>
+                </div>
+            </div>
+
+            <!-- Navigation Instructions -->
+            <div class="nav-instructions">
+                <h4>📋 Navigation Guide</h4>
+                <ul>
+                    <li><strong>Set Goal:</strong> Click "Set Goal", then click map for position, click again for direction</li>
+                    <li><strong>Pan Map:</strong> Click and drag to move around the map</li>
+                    <li><strong>Zoom:</strong> Use mouse wheel to zoom in/out</li>
+                    <li><strong>Robot:</strong> Blue circle 🔵 with direction line</li>
+                    <li><strong>Goal:</strong> Red target 🎯 with direction arrow</li>
+                </ul>
+            </div>
         </div>
 
     </div>
+    
     <script src="libs/easeljs.min.js"></script>
     <script src="libs/eventemitter2.min.js"></script>
     <script src="libs/roslib.min.js"></script>
     <script src="libs/ros2d.min.js"></script>
     <script src="app.js"></script>
     <script src="navigation.js"></script>
+
+    <!-- Navigation UI Controller -->
+    <script>
+        // Wait for mapRenderer to be initialized
+        document.addEventListener('DOMContentLoaded', () => {
+            // Button event listeners
+            const setGoalBtn = document.getElementById('setGoalBtn');
+            const clearGoalBtn = document.getElementById('clearGoalBtn');
+            const centerViewBtn = document.getElementById('centerViewBtn');
+            const resetZoomBtn = document.getElementById('resetZoomBtn');
+            
+            if (setGoalBtn) {
+                setGoalBtn.addEventListener('click', () => {
+                    if (typeof mapRenderer !== 'undefined') {
+                        mapRenderer.toggleGoalMode();
+                    }
+                });
+            }
+            
+            if (clearGoalBtn) {
+                clearGoalBtn.addEventListener('click', () => {
+                    if (typeof mapRenderer !== 'undefined') {
+                        mapRenderer.clearGoal();
+                        document.getElementById('goalInfoCard').style.display = 'none';
+                    }
+                });
+            }
+
+            if (centerViewBtn) {
+                centerViewBtn.addEventListener('click', () => {
+                    if (typeof mapRenderer !== 'undefined' && mapRenderer.robotPos && mapRenderer.mapData) {
+                        const info = mapRenderer.mapData.info;
+                        const rx = (mapRenderer.robotPos.x - info.origin.position.x) / info.resolution;
+                        const ry = (-mapRenderer.robotPos.y - info.origin.position.y) / info.resolution;
+                        
+                        mapRenderer.panX = mapRenderer.canvas.width / 2 - rx * mapRenderer.zoom;
+                        mapRenderer.panY = mapRenderer.canvas.height / 2 - ry * mapRenderer.zoom;
+                        mapRenderer.redraw();
+                    }
+                });
+            }
+
+            if (resetZoomBtn) {
+                resetZoomBtn.addEventListener('click', () => {
+                    if (typeof mapRenderer !== 'undefined') {
+                        mapRenderer.zoom = 1.0;
+                        mapRenderer.panX = 0;
+                        mapRenderer.panY = 0;
+                        document.getElementById('zoomLevel').textContent = '1.00x';
+                        mapRenderer.redraw();
+                    }
+                });
+            }
+
+            // Update goal information display
+            setInterval(() => {
+                if (typeof mapRenderer !== 'undefined' && mapRenderer.goalPos) {
+                    document.getElementById('goalInfoCard').style.display = 'block';
+                    document.getElementById('goalX').textContent = mapRenderer.goalPos.x.toFixed(2) + ' m';
+                    document.getElementById('goalY').textContent = mapRenderer.goalPos.y.toFixed(2) + ' m';
+                    
+                    // Calculate distance to goal
+                    if (mapRenderer.robotPos) {
+                        const dx = mapRenderer.goalPos.x - mapRenderer.robotPos.x;
+                        const dy = mapRenderer.goalPos.y - mapRenderer.robotPos.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        document.getElementById('goalDistance').textContent = distance.toFixed(2) + ' m';
+                        
+                        // Calculate direction
+                        const angle = Math.atan2(dy, dx);
+                        const degrees = ((angle * 180 / Math.PI) + 360) % 360;
+                        document.getElementById('goalDirection').textContent = degrees.toFixed(1) + '°';
+                    }
+                }
+            }, 100);
+        });
+    </script>
 
 </body>
 </html>

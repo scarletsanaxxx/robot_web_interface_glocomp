@@ -1,4 +1,8 @@
-// Subscribe to odometry topic for robot position
+/***********************
+ * ROS TOPICS
+ ***********************/
+
+// Odometry (robot pose)
 var odomTopic = new ROSLIB.Topic({
     ros: ros,
     name: "/odom",
@@ -6,308 +10,493 @@ var odomTopic = new ROSLIB.Topic({
 });
 
 odomTopic.subscribe(function(message) {
-    // Update map renderer with robot position and orientation
     if (message.pose && message.pose.pose) {
-        const robotPos = message.pose.pose.position;
-        const robotOri = message.pose.pose.orientation;
-        
-        mapRenderer.updateRobotPose(robotPos, robotOri);
+        mapRenderer.updateRobotPose(
+            message.pose.pose.position,
+            message.pose.pose.orientation
+        );
     }
 });
+
+var goalPoseTopic = new ROSLIB.Topic({
+    ros: ros,
+    name: "/goal_pose",
+    messageType: "geometry_msgs/PoseStamped",
+});
+
+
+/***********************
+ * MAP RENDERER
+ ***********************/
 
 class MapRenderer {
     constructor(canvasId) {
         this.canvas = document.getElementById(canvasId);
         this.ctx = this.canvas.getContext('2d');
+
+        this.canvas.width = 800;
+        this.canvas.height = 600;
+
         this.mapData = null;
+
         this.zoom = 1.0;
         this.panX = 0;
         this.panY = 0;
         this.minZoom = 0.5;
         this.maxZoom = 5.0;
-        this.zoomSensitivity = 0.1;
-        
-        // Set canvas size
-        this.canvas.width = 600;
-        this.canvas.height = 600;
-        
-        // Setup event listeners
-        this.setupEventListeners();
-        
-        // Initialize with a default grid
-        this.drawDefaultGrid();
 
-        // Add this after the constructor
         this.robotPos = null;
         this.robotOri = null;
 
+        this.goalPos = null;
+        this.goalOrientation = 0; // Store goal orientation in radians
+
+        this.isSettingGoal = false; // Flag for goal setting mode
+
+        this.setupEventListeners();
+        this.drawDefaultGrid();
     }
-    
-    // Add this method to MapRenderer class
-    updateRobotPose(position, orientation) {
-        this.robotPos = position;
-        this.robotOri = orientation;
+
+    updateRobotPose(pos, ori) {
+        this.robotPos = pos;
+        this.robotOri = ori;
         this.redraw();
-    };
+    }
 
     setupEventListeners() {
-        // Mouse wheel zoom
+        // Zoom
         this.canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
-            const rect = this.canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
-            
             const oldZoom = this.zoom;
-            const zoomDirection = e.deltaY > 0 ? -1 : 1;
-            this.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom + zoomDirection * this.zoomSensitivity));
-            
-            // Adjust pan to zoom towards mouse position
-            const zoomRatio = this.zoom / oldZoom;
-            this.panX = mouseX - (mouseX - this.panX) * zoomRatio;
-            this.panY = mouseY - (mouseY - this.panY) * zoomRatio;
-            
+            this.zoom += (e.deltaY > 0 ? -0.1 : 0.1);
+            this.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom));
+
+            const rect = this.canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
+            const ratio = this.zoom / oldZoom;
+            this.panX = mx - (mx - this.panX) * ratio;
+            this.panY = my - (my - this.panY) * ratio;
+
             document.getElementById('zoomLevel').textContent = this.zoom.toFixed(2) + 'x';
             this.redraw();
         });
-        
-        // Pan with mouse drag
-        let isDragging = false;
+
+        // Pan
+        let dragging = false;
         let lastX = 0;
         let lastY = 0;
-        
+
         this.canvas.addEventListener('mousedown', (e) => {
-            isDragging = true;
+            if (this.isSettingGoal) return; // Don't pan when setting goal
+            dragging = true;
             lastX = e.clientX;
             lastY = e.clientY;
         });
-        
+
         document.addEventListener('mousemove', (e) => {
-            if (!isDragging) return;
-            const deltaX = e.clientX - lastX;
-            const deltaY = e.clientY - lastY;
-            this.panX += deltaX;
-            this.panY += deltaY;
+            if (!dragging) return;
+            this.panX += e.clientX - lastX;
+            this.panY += e.clientY - lastY;
             lastX = e.clientX;
             lastY = e.clientY;
             this.redraw();
         });
-        
-        document.addEventListener('mouseup', () => {
-            isDragging = false;
+
+        document.addEventListener('mouseup', () => dragging = false);
+
+        // CLICK TO SET GOAL
+        this.canvas.addEventListener('click', (e) => {
+            if (!this.mapData || !this.isSettingGoal) return;
+
+            const rect = this.canvas.getBoundingClientRect();
+            const px = e.clientX - rect.left;
+            const py = e.clientY - rect.top;
+
+            const world = this.screenToWorld(px, py);
+            this.goalPos = world;
+            
+            // Show orientation selector
+            this.showOrientationSelector(e.clientX, e.clientY);
         });
-        
-        // Touch events for mobile
-        this.canvas.addEventListener('touchstart', (e) => {
-            isDragging = true;
-            lastX = e.touches[0].clientX;
-            lastY = e.touches[0].clientY;
-        });
-        
-        document.addEventListener('touchmove', (e) => {
-            if (!isDragging) return;
-            const deltaX = e.touches[0].clientX - lastX;
-            const deltaY = e.touches[0].clientY - lastY;
-            this.panX += deltaX;
-            this.panY += deltaY;
-            lastX = e.touches[0].clientX;
-            lastY = e.touches[0].clientY;
-            this.redraw();
-        });
-        
-        document.addEventListener('touchend', () => {
-            isDragging = false;
+
+        // Update cursor based on mode
+        this.canvas.addEventListener('mousemove', (e) => {
+            if (this.isSettingGoal) {
+                this.canvas.style.cursor = 'crosshair';
+            } else {
+                this.canvas.style.cursor = 'grab';
+            }
         });
     }
-    
+
+    screenToWorld(px, py) {
+        const info = this.mapData.info;
+        const res = info.resolution;
+
+        const x = (px - this.panX) / this.zoom;
+        const y = (py - this.panY) / this.zoom;
+
+        return {
+            x: x * res + info.origin.position.x,
+            y: -y * res - info.origin.position.y
+        };
+    }
+
+    worldToScreen(wx, wy) {
+        const info = this.mapData.info;
+        const res = info.resolution;
+
+        const x = (wx - info.origin.position.x) / res;
+        const y = (-wy - info.origin.position.y) / res;
+
+        return {
+            x: x * this.zoom + this.panX,
+            y: y * this.zoom + this.panY
+        };
+    }
+
+    showOrientationSelector(clickX, clickY) {
+        // Create a temporary overlay for orientation selection
+        const overlay = document.createElement('div');
+        overlay.style.position = 'fixed';
+        overlay.style.left = '0';
+        overlay.style.top = '0';
+        overlay.style.width = '100%';
+        overlay.style.height = '100%';
+        overlay.style.background = 'rgba(0,0,0,0.3)';
+        overlay.style.zIndex = '1000';
+        overlay.style.cursor = 'crosshair';
+
+        const instructions = document.createElement('div');
+        instructions.style.position = 'fixed';
+        instructions.style.left = '50%';
+        instructions.style.top = '20px';
+        instructions.style.transform = 'translateX(-50%)';
+        instructions.style.background = '#333';
+        instructions.style.color = '#fff';
+        instructions.style.padding = '15px 30px';
+        instructions.style.borderRadius = '8px';
+        instructions.style.fontSize = '16px';
+        instructions.style.boxShadow = '0 4px 6px rgba(0,0,0,0.3)';
+        instructions.innerHTML = '🎯 Click to set goal direction (or press ESC to cancel)';
+
+        overlay.appendChild(instructions);
+        document.body.appendChild(overlay);
+
+        const goalScreenPos = this.worldToScreen(this.goalPos.x, this.goalPos.y);
+
+        overlay.addEventListener('click', (e) => {
+            const dx = e.clientX - goalScreenPos.x;
+            const dy = e.clientY - goalScreenPos.y;
+            this.goalOrientation = Math.atan2(dy, dx);
+            
+            this.publishGoal();
+            this.isSettingGoal = false;
+            this.updateGoalButton();
+            document.body.removeChild(overlay);
+            this.redraw();
+        });
+
+        overlay.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.goalPos = null;
+                this.isSettingGoal = false;
+                this.updateGoalButton();
+                document.body.removeChild(overlay);
+                this.redraw();
+            }
+        });
+
+        overlay.focus();
+    }
+
+    publishGoal() {
+        if (!this.goalPos) return;
+
+        // Convert orientation to quaternion
+        const qz = Math.sin(this.goalOrientation / 2);
+        const qw = Math.cos(this.goalOrientation / 2);
+
+        const msg = {
+            header: { 
+                frame_id: "map", 
+                stamp: { sec: Math.floor(Date.now() / 1000), nanosec: 0 } 
+            },
+            pose: {
+                position: {
+                    x: this.goalPos.x,
+                    y: this.goalPos.y,
+                    z: 0.0
+                },
+                orientation: {
+                    x: 0.0, 
+                    y: 0.0, 
+                    z: qz, 
+                    w: qw
+                }
+            }
+        };
+
+        console.log("Publishing goal:", msg);
+        goalPoseTopic.publish(msg);
+        
+        this.showNotification('✅ Goal sent to robot!', 'success');
+    }
+
+    clearGoal() {
+        this.goalPos = null;
+        this.goalOrientation = 0;
+        this.redraw();
+        this.showNotification('🗑️ Goal cleared', 'info');
+    }
+
+    toggleGoalMode() {
+        this.isSettingGoal = !this.isSettingGoal;
+        this.updateGoalButton();
+        
+        if (this.isSettingGoal) {
+            this.showNotification('🎯 Click on map to set goal position', 'info');
+        } else {
+            this.showNotification('Goal mode disabled', 'info');
+        }
+    }
+
+    updateGoalButton() {
+        const btn = document.getElementById('setGoalBtn');
+        if (btn) {
+            if (this.isSettingGoal) {
+                btn.textContent = '❌ Cancel Goal';
+                btn.style.background = '#dc3545';
+            } else {
+                btn.textContent = '🎯 Set Goal';
+                btn.style.background = '#28a745';
+            }
+        }
+    }
+
+    showNotification(message, type = 'info') {
+        const notification = document.createElement('div');
+        notification.textContent = message;
+        notification.style.position = 'fixed';
+        notification.style.top = '80px';
+        notification.style.right = '20px';
+        notification.style.padding = '12px 20px';
+        notification.style.borderRadius = '6px';
+        notification.style.color = '#fff';
+        notification.style.fontSize = '14px';
+        notification.style.zIndex = '2000';
+        notification.style.boxShadow = '0 4px 6px rgba(0,0,0,0.2)';
+        notification.style.animation = 'slideIn 0.3s ease';
+        
+        if (type === 'success') {
+            notification.style.background = '#28a745';
+        } else if (type === 'error') {
+            notification.style.background = '#dc3545';
+        } else {
+            notification.style.background = '#17a2b8';
+        }
+
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+            notification.style.animation = 'slideOut 0.3s ease';
+            setTimeout(() => document.body.removeChild(notification), 300);
+        }, 3000);
+    }
+
     drawDefaultGrid() {
-        this.ctx.fillStyle = '#1a1a1a';
+        this.ctx.fillStyle = "#1a1a1a";
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         
-        this.ctx.strokeStyle = '#444';
+        // Draw grid lines
+        this.ctx.strokeStyle = "#333";
         this.ctx.lineWidth = 1;
         
-        // Draw grid
-        for (let i = 0; i <= 10; i++) {
-            const x = (i / 10) * this.canvas.width;
-            const y = (i / 10) * this.canvas.height;
-            
+        for (let i = 0; i < this.canvas.width; i += 50) {
             this.ctx.beginPath();
-            this.ctx.moveTo(x, 0);
-            this.ctx.lineTo(x, this.canvas.height);
-            this.ctx.stroke();
-            
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, y);
-            this.ctx.lineTo(this.canvas.width, y);
+            this.ctx.moveTo(i, 0);
+            this.ctx.lineTo(i, this.canvas.height);
             this.ctx.stroke();
         }
         
-        // Center marker
-        this.ctx.fillStyle = '#4CAF50';
-        this.ctx.beginPath();
-        this.ctx.arc(this.canvas.width / 2, this.canvas.height / 2, 5, 0, Math.PI * 2);
-        this.ctx.fill();
+        for (let i = 0; i < this.canvas.height; i += 50) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, i);
+            this.ctx.lineTo(this.canvas.width, i);
+            this.ctx.stroke();
+        }
+
+        // Draw center crosshair
+        this.ctx.strokeStyle = "#555";
+        this.ctx.lineWidth = 2;
+        const cx = this.canvas.width / 2;
+        const cy = this.canvas.height / 2;
         
-        this.ctx.fillStyle = '#aaa';
-        this.ctx.font = '12px Arial';
-        this.ctx.fillText('Map Origin', this.canvas.width / 2 + 10, this.canvas.height / 2 - 10);
+        this.ctx.beginPath();
+        this.ctx.moveTo(cx - 20, cy);
+        this.ctx.lineTo(cx + 20, cy);
+        this.ctx.moveTo(cx, cy - 20);
+        this.ctx.lineTo(cx, cy + 20);
+        this.ctx.stroke();
     }
-    
-    updateMapData(mapData) {
-        this.mapData = mapData;
+
+    updateMapData(map) {
+        this.mapData = map;
         this.redraw();
-        document.getElementById('mapStatus').textContent = `Map: ${mapData.info.width}x${mapData.info.height} (${mapData.info.resolution.toFixed(2)}m/cell)`;
+        document.getElementById('mapStatus').textContent =
+            `Map: ${map.info.width} x ${map.info.height} (${map.info.resolution.toFixed(3)}m/cell)`;
     }
-    
+
     redraw() {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        
-        if (this.mapData) {
-            this.renderMapData();
-        } else {
+        if (!this.mapData) {
             this.drawDefaultGrid();
+            return;
         }
-    }
-    
-    // Helper function to draw a triangle marker
-    drawTriangleMarker(x, y, yaw, size, color) {
-        this.ctx.save();
-        this.ctx.translate(x, y);
-        this.ctx.rotate(yaw);
-        
-        this.ctx.fillStyle = color;
-        this.ctx.beginPath();
-        this.ctx.moveTo(0, 0);
-        this.ctx.lineTo(0, size * 0.3);
-        this.ctx.lineTo(size, 0);
-        this.ctx.lineTo(0, -size * 0.3);
-        this.ctx.closePath();
-        this.ctx.fill();
-        
-        this.ctx.restore();
+        this.renderMap();
     }
 
-    renderMapData() {
-        const mapInfo = this.mapData.info;
-        const mapData = this.mapData.data;
-        const width = mapInfo.width;
-        const height = mapInfo.height;
-        const resolution = mapInfo.resolution;
-        
-        // Calculate how many pixels per cell on screen
-        let cellPixels = Math.max(1, this.zoom);
-        
-        // Auto-fit map on first load
-        if (this.zoom === 1.0 && this.panX === 0 && this.panY === 0) {
-            const canvasWidth = this.canvas.width;
-            const canvasHeight = this.canvas.height;
-            const mapPixelWidth = width * cellPixels;
-            const mapPixelHeight = height * cellPixels;
-            
-            // Calculate zoom to fit map in canvas
-            const zoomX = canvasWidth / mapPixelWidth;
-            const zoomY = canvasHeight / mapPixelHeight;
-            this.zoom = Math.min(zoomX, zoomY) * 0.8; // 0.95 for some padding
-            
-            cellPixels = Math.max(1, this.zoom);
-        }
-        
-        // Save context state
+    renderMap() {
+        const info = this.mapData.info;
+        const data = this.mapData.data;
+        const w = info.width;
+        const h = info.height;
+
         this.ctx.save();
-        
-        // Apply pan and zoom transformations
         this.ctx.translate(this.panX, this.panY);
         this.ctx.scale(this.zoom, this.zoom);
-        
-        // Draw background
-        this.ctx.fillStyle = '#a9a9a9'; // Unknown space (gray)
-        this.ctx.fillRect(0, 0, width * cellPixels, height * cellPixels);
-        
-        // Draw occupancy grid
-        for (let i = 0; i < mapData.length; i++) {
-            const occupancy = mapData[i];
+
+        // Draw map cells
+        for (let i = 0; i < data.length; i++) {
+            const v = data[i];
+            if (v < 0) continue; // Unknown space
             
-            // Calculate grid position
-            const x = (i % width);
-            const y = Math.floor(i / width);
-            
-            // Determine color based on occupancy value
-            // -1: Unknown, 0-50: Free, 51-100: Occupied
-            if (occupancy === -1) {
-                // Unknown - don't draw (show background)
-                continue;
-            } else if (occupancy === 0) {
-                // Free space - white or very light
-                this.ctx.fillStyle = '#ffffff';
-            } else if (occupancy <= 50) {
-                // Probably free - light gray
-                this.ctx.fillStyle = '#e8e8e8';
+            // Gradient coloring based on occupancy
+            if (v > 50) {
+                this.ctx.fillStyle = "#000"; // Occupied
             } else {
-                // Occupied - dark gray/black
-                this.ctx.fillStyle = '#000000';
+                const gray = Math.floor(255 - (v * 2.55));
+                this.ctx.fillStyle = `rgb(${gray}, ${gray}, ${gray})`;
             }
             
-            // Draw cell
-            this.ctx.fillRect(x * cellPixels, y * cellPixels, cellPixels, cellPixels);
-        }
-        
-        // Draw robot pose
-        if (this.robotPos && this.robotOri) {
-            const resolution = mapInfo.resolution;
-            
-            // Convert robot position from world coordinates to map coordinates
-            const robotMapX = (this.robotPos.x - mapInfo.origin.position.x) / resolution;
-            const robotMapY = (- this.robotPos.y - mapInfo.origin.position.y) / resolution;
-            
-            // Get robot orientation (convert quaternion to yaw)
-            const q = this.robotOri;
-            const robotYaw = -Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
-            
-            // Draw robot triangle
-            const robotArrowSize = 5 * cellPixels;
-            this.drawTriangleMarker(robotMapX * cellPixels, robotMapY * cellPixels, robotYaw, robotArrowSize, '#0066FF');
-            
-            this.ctx.restore();
+            const x = i % w;
+            const y = Math.floor(i / w);
+            this.ctx.fillRect(x, y, 1, 1);
         }
 
-        // Draw origin marker (robot starting position) - Arrow pointing in direction
+        // Draw robot
+        if (this.robotPos) {
+            const rx = (this.robotPos.x - info.origin.position.x) / info.resolution;
+            const ry = (-this.robotPos.y - info.origin.position.y) / info.resolution;
+            
+            // Robot body
+            this.ctx.fillStyle = "#0066FF";
+            this.ctx.beginPath();
+            this.ctx.arc(rx, ry, 5 / this.zoom, 0, Math.PI * 2);
+            this.ctx.fill();
+            
+            // Robot direction indicator
+            if (this.robotOri) {
+                const yaw = this.quaternionToYaw(this.robotOri);
+                this.ctx.strokeStyle = "#00CCFF";
+                this.ctx.lineWidth = 2 / this.zoom;
+                this.ctx.beginPath();
+                this.ctx.moveTo(rx, ry);
+                this.ctx.lineTo(
+                    rx + Math.cos(yaw) * (10 / this.zoom),
+                    ry + Math.sin(yaw) * (10 / this.zoom)
+                );
+                this.ctx.stroke();
+            }
+            
+            // Robot label
+            this.ctx.fillStyle = "#FFF";
+            this.ctx.font = `${12 / this.zoom}px Arial`;
+            this.ctx.fillText("🤖", rx + 8 / this.zoom, ry - 8 / this.zoom);
+        }
+
+        // Draw goal
+        if (this.goalPos) {
+            const gx = (this.goalPos.x - info.origin.position.x) / info.resolution;
+            const gy = (-this.goalPos.y - info.origin.position.y) / info.resolution;
+            
+            // Goal outer ring
+            this.ctx.strokeStyle = "#FF3333";
+            this.ctx.lineWidth = 2 / this.zoom;
+            this.ctx.beginPath();
+            this.ctx.arc(gx, gy, 8 / this.zoom, 0, Math.PI * 2);
+            this.ctx.stroke();
+            
+            // Goal center
+            this.ctx.fillStyle = "#FF3333";
+            this.ctx.beginPath();
+            this.ctx.arc(gx, gy, 4 / this.zoom, 0, Math.PI * 2);
+            this.ctx.fill();
+            
+            // Goal direction arrow
+            this.ctx.strokeStyle = "#FF6666";
+            this.ctx.lineWidth = 2 / this.zoom;
+            this.ctx.beginPath();
+            this.ctx.moveTo(gx, gy);
+            const arrowLen = 15 / this.zoom;
+            this.ctx.lineTo(
+                gx + Math.cos(this.goalOrientation) * arrowLen,
+                gy + Math.sin(this.goalOrientation) * arrowLen
+            );
+            this.ctx.stroke();
+            
+            // Arrow head
+            const headSize = 5 / this.zoom;
+            const angle = this.goalOrientation;
+            this.ctx.beginPath();
+            this.ctx.moveTo(
+                gx + Math.cos(angle) * arrowLen,
+                gy + Math.sin(angle) * arrowLen
+            );
+            this.ctx.lineTo(
+                gx + Math.cos(angle) * arrowLen - Math.cos(angle - Math.PI / 6) * headSize,
+                gy + Math.sin(angle) * arrowLen - Math.sin(angle - Math.PI / 6) * headSize
+            );
+            this.ctx.moveTo(
+                gx + Math.cos(angle) * arrowLen,
+                gy + Math.sin(angle) * arrowLen
+            );
+            this.ctx.lineTo(
+                gx + Math.cos(angle) * arrowLen - Math.cos(angle + Math.PI / 6) * headSize,
+                gy + Math.sin(angle) * arrowLen - Math.sin(angle + Math.PI / 6) * headSize
+            );
+            this.ctx.stroke();
+            
+            // Goal label
+            this.ctx.fillStyle = "#FFF";
+            this.ctx.font = `${12 / this.zoom}px Arial`;
+            this.ctx.fillText("🎯", gx + 10 / this.zoom, gy - 10 / this.zoom);
+        }
+
         this.ctx.restore();
-        this.ctx.save();
-        this.ctx.translate(this.panX, this.panY);
-        this.ctx.scale(this.zoom, this.zoom);
+    }
 
-        const originX = -mapInfo.origin.position.x / resolution;
-        const originY = -mapInfo.origin.position.y / resolution;
-
-        // Get rotation from origin quaternion (convert quaternion to yaw angle)
-        let yaw = 0;
-        if (mapInfo.origin.orientation) {
-            const q = mapInfo.origin.orientation;
-            // Convert quaternion to yaw (rotation around z-axis)
-            yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
-        }
-
-        // Draw arrow
-        const arrowHeadSize = 5 * cellPixels;
-        this.drawTriangleMarker(originX * cellPixels, originY * cellPixels, yaw, arrowHeadSize, '#00ff15');
-
-        this.ctx.restore();
+    quaternionToYaw(q) {
+        // Convert quaternion to yaw angle
+        return Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
     }
 }
 
-// Initialize the map renderer
-const mapRenderer = new MapRenderer('mapCanvas');
+/***********************
+ * INIT
+ ***********************/
 
-// Subscribe to map topic (when you have map data)
+const mapRenderer = new MapRenderer("mapCanvas");
+
+// Map subscription
 var mapTopic = new ROSLIB.Topic({
     ros: ros,
     name: "/map",
     messageType: "nav_msgs/msg/OccupancyGrid",
 });
 
-mapTopic.subscribe(function(message) {
-    console.log('Map data received:', message);
-    // Update map with real data
-    mapRenderer.updateMapData(message);
+mapTopic.subscribe(function(msg) {
+    mapRenderer.updateMapData(msg);
 });
