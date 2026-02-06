@@ -20,7 +20,7 @@ odomTopic.subscribe(function(message) {
 
 var goalPoseTopic = new ROSLIB.Topic({
     ros: ros,
-    name: "/goal_pose",
+    name: "/goal",
     messageType: "geometry_msgs/PoseStamped",
 });
 
